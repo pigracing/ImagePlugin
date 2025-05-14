@@ -31,7 +31,7 @@ class ModelConfig:
 class ImagePlugin(PluginBase):
     description = "图片处理插件，支持文生图，图生图，图生文的功能"
     author = "pigracing"
-    version = "1.0.0"
+    version = "1.0.1"
 
     def __init__(self):
         super().__init__()
@@ -62,6 +62,24 @@ class ImagePlugin(PluginBase):
             if text.startswith(_keyword):
                 return _keyword
         return None
+    
+    @on_xml_message(priority=100)  # 使用最高优先级确保最先处理
+    async def handle_xml_quote(self, bot: WechatAPIClient, message: dict):
+        """专门处理XML格式的引用消息"""
+        logger.debug("ImagePlugin---on_xml_quote_message")
+        #logger.debug(message)
+        if not self.enable:
+            logger.debug("ImagePlugin---on_xml_quote_message--not enable")
+            return True
+        else:
+            if message["Quote"] is None:
+                logger.debug("ImagePlugin---on_xml_quote_message--Quote is None")
+                return True
+            else:
+                if message["Quote"]["MsgType"] == 3:
+                    logger.debug("ImagePlugin---on_xml_quote_message--MsgType is 3")
+                    return False
+        return True
 
     @on_text_message
     async def handle_text(self, bot: WechatAPIClient, message: dict):
@@ -95,11 +113,11 @@ class ImagePlugin(PluginBase):
             await bot.send_text_message(message["FromWxid"], "处理消息失败，请稍后再试。")
         return False  # 阻止后续插件处理
     
-    @on_quote_message
+    @on_quote_message(priority=30)
     async def handle_text(self, bot: WechatAPIClient, message: dict):
         logger.debug("ImagePlugin---on_quote_message")
         if not self.enable:
-            return
+            return True
         logger.debug(f"ImagePlugin---{message}")
         newMsgId = message["Quote"]["NewMsgId"]
         logger.debug("ImagePlugin---on_quote_message------"+newMsgId)
@@ -115,7 +133,7 @@ class ImagePlugin(PluginBase):
             logger.debug(f"ImagePlugin匹配到关键字: {matched_name}")
         else:
             logger.debug("ImagePlugin没有匹配到关键字,请检查配置")
-            return
+            return True
         
         content = content[len(matched_name):].strip()
         logger.debug("ImagePlugin用户指令内容: " + content)
@@ -137,21 +155,7 @@ class ImagePlugin(PluginBase):
                     }
                 }
             ]
-            user_text1 = [
-                {
-                    "type": "text",
-                    "text": content
-                },
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url":img_data[:100]
-                    }
-                }
-            ]
             _messages = [{"role": "system", "content": _config.prompt},{"role": "user", "content": user_text}]
-            _messages1 = [{"role": "system", "content": _config.prompt},{"role": "user", "content": user_text1}]
-            logger.debug(_messages1)
             out_message = await self.call_openai_api(_config, _messages)
             logger.debug("返回内容: " + out_message)
             if self.is_image_url(out_message):
@@ -167,18 +171,18 @@ class ImagePlugin(PluginBase):
             else:  
                 # 如果返回的是文本，直接发送
                 await bot.send_text_message(message["FromWxid"], out_message)
+            return False  # 阻止后续插件处理
         except Exception as e:
             logger.error(f"处理消息失败: {e}")
             # await bot.send_text_message(message["FromWxid"], "处理消息失败，请稍后再试。")
             return False  # 阻止后续插件处理
-        return False  # 阻止后续插件处理
 
     
-    @on_image_message(priority=20)
+    @on_image_message(priority=30)
     async def handle_image(self, bot: WechatAPIClient, message: dict):
         """处理图片消息"""
         if not self.enable:
-            return
+            return True
         try:
             logger.debug("ImagePlugin-----处理图片消息")
             # message["Content"] = message["Content"][:100]
@@ -191,14 +195,16 @@ class ImagePlugin(PluginBase):
 
             logger.info(f"收到图片消息: MsgId={msg_id}, FromWxid={from_wxid}, SenderWxid={sender_wxid},aeskey={newMsgId}")
 
-            img_data_base64 = message.get("Content")
+            img_data_base64 = message["ImgBuf"]["buffer"]
             logger.debug(img_data_base64[:100])
             self.image_cache[str(newMsgId)] = img_data_base64
             logger.debug("cache:"+str(newMsgId)+","+img_data_base64[:100])
-
+            return False
         except Exception as e:
             logger.error(f"处理图片消息失败: {e}")
             logger.error(f"错误详情: {traceback.format_exc()}")
+            return False
+
 
     async def call_openai_api(self,config: ModelConfig, messages: list[Dict[str, Any]]) -> str:
         url = f"{config.open_ai_api_url}/chat/completions"
